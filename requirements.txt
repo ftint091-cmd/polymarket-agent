@@ -1,5 +1,5 @@
-requests
-numpy
-pandas
-websockets
-asyncio
+web3==6.11.0
+requests==2.31.0
+python-dotenv==1.0.0
+eth-account==0.13.7
+eth-keys==0.5.2
