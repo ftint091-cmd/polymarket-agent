@@ -4,9 +4,9 @@ import time
 import json
 from datetime import datetime
 from dotenv import load_dotenv
-from web3 import Web3
 
 load_dotenv()
+
 
 class PolymarketCopyBot:
     def __init__(self, tracked_address, bet_size, check_interval, slippage_tolerance):
@@ -14,146 +14,169 @@ class PolymarketCopyBot:
         self.bet_size = bet_size
         self.check_interval = check_interval
         self.slippage_tolerance = slippage_tolerance
-        
+
         self.private_key = os.getenv('PRIVATE_KEY')
         self.wallet_address = os.getenv('WALLET_ADDRESS')
-        
-        if not self.private_key or not self.wallet_address:
-            raise ValueError('PRIVATE_KEY or WALLET_ADDRESS not found in .env')
-        
-        self.w3 = Web3(Web3.HTTPProvider('https://polygon-rpc.com'))
-        self.account = self.w3.eth.account.from_key(self.private_key)
-        
-        self.api_host = 'https://gamma-api.polymarket.com'
+
+        # Demo mode when no wallet credentials are configured
+        self.demo_mode = not (self.private_key and self.wallet_address)
+
+        if self.demo_mode:
+            print("[INFO] Running in DEMO mode (no PRIVATE_KEY/WALLET_ADDRESS configured)")
+        else:
+            print(f"[INFO] Running in LIVE mode - Wallet: {self.wallet_address}")
+
+        self.data_api = 'https://data-api.polymarket.com'
+        self.gamma_api = 'https://gamma-api.polymarket.com'
         self.copied_bets = 0
         self.total_pnl = 0.0
         self.last_activity = 'Waiting'
         self.running = False
-        self.processed_bets = set()
-        
-        print(f"Bot initialized - Tracking: {self.tracked_address}")
-    
+        self.processed_trades = set()
+
+        print(f"[INFO] Bot initialized - Tracking: {self.tracked_address}")
+
     def run(self):
         self.running = True
-        print("Bot started!")
-        
+        mode = "DEMO" if self.demo_mode else "LIVE"
+        print(f"[INFO] Bot started in {mode} mode!")
+
         while self.running:
             try:
                 self.update_last_activity()
                 self.monitor_trades()
                 time.sleep(self.check_interval)
             except Exception as e:
-                print(f"Error: {e}")
+                print(f"[ERROR] {e}")
                 time.sleep(self.check_interval)
-    
+
     def stop(self):
         self.running = False
-        print("Bot stopped!")
-    
+        print("[INFO] Bot stopped!")
+
     def update_last_activity(self):
         self.last_activity = datetime.now().strftime('%H:%M:%S')
-    
+
     def monitor_trades(self):
-        """Мониторим ставки отслеживаемого адреса"""
+        """Monitor trades for the tracked address via data-api.polymarket.com"""
         try:
             print(f"[MONITOR] Checking trades for {self.tracked_address}")
-            
-            # Получаем последние ставки через Gamma API
-            url = f'{self.api_host}/trades?user={self.tracked_address}&limit=50'
+
+            url = f'{self.data_api}/activity?user={self.tracked_address}&limit=50'
             print(f"[API] Requesting: {url}")
-            
+
             response = requests.get(url, timeout=10)
             print(f"[API] Response status: {response.status_code}")
-            
+
             if response.status_code != 200:
-                print(f"[ERROR] API returned {response.status_code}")
-                print(f"[ERROR] Response: {response.text[:200]}")
+                print(f"[ERROR] API returned {response.status_code}: {response.text[:200]}")
                 return
-            
+
             data = response.json()
-            print(f"[DEBUG] Response data: {json.dumps(data)[:300]}")
-            
-            trades = data.get('data', []) if isinstance(data, dict) else data
-            
+            trades = data if isinstance(data, list) else data.get('data', [])
+
             print(f"[TRADES] Found {len(trades)} recent trades")
-            
+
             if not trades:
                 return
-            
+
             for trade in trades:
-                trade_id = trade.get('id')
-                
-                if trade_id and trade_id not in self.processed_bets:
-                    print(f"[NEW TRADE] {trade_id}")
+                trade_id = trade.get('id') or trade.get('transactionHash')
+
+                if not trade_id:
+                    print(f"[SKIP] Trade missing id and transactionHash, skipping")
+                    continue
+
+                if trade_id not in self.processed_trades:
+                    print(f"[NEW TRADE] Detected: {trade_id}")
                     self.copy_trade(trade)
-                    self.processed_bets.add(trade_id)
-        
+                    self.processed_trades.add(trade_id)
+
+        except requests.exceptions.Timeout:
+            print("[ERROR] API request timed out")
+        except requests.exceptions.ConnectionError:
+            print("[ERROR] Could not connect to Polymarket API")
         except Exception as e:
-            print(f"Error monitoring trades: {e}")
+            print(f"[ERROR] monitoring trades: {e}")
             import traceback
             traceback.print_exc()
-    
+
     def copy_trade(self, trade):
-        """Копируем ставку"""
+        """Log and copy a detected trade"""
         try:
-            trade_id = trade.get('id')
-            market = trade.get('market', {})
-            market_id = market.get('id') if isinstance(market, dict) else market
-            outcome = trade.get('outcome')
-            amount = float(trade.get('amount', self.bet_size))
-            
-            print(f"[COPY] Trade ID: {trade_id}")
-            print(f"[COPY] Market: {market_id}")
-            print(f"[COPY] Outcome: {outcome}, Amount: {amount}")
-            
-            # Копируем ставку
-            success = self.place_bet(market_id, outcome, amount)
-            
+            trade_id = trade.get('id') or trade.get('transactionHash')
+            outcome = trade.get('outcome') or trade.get('side', 'Unknown')
+            timestamp = trade.get('timestamp') or trade.get('createdAt', '')
+
+            try:
+                size = float(trade.get('usdcSize') or trade.get('size') or trade.get('amount') or self.bet_size)
+            except (TypeError, ValueError):
+                size = float(self.bet_size)
+
+            try:
+                price = float(trade.get('price') or 0)
+            except (TypeError, ValueError):
+                price = 0.0
+
+            market_id = trade.get('market') or trade.get('conditionId', '')
+            question = trade.get('question') or trade.get('title') or market_id
+
+            print(f"[COPY] -------- Trade Details --------")
+            print(f"[COPY] ID:        {trade_id}")
+            print(f"[COPY] Market:    {question}")
+            print(f"[COPY] Side:      {outcome}")
+            print(f"[COPY] Size:      {size:.2f} USDC")
+            print(f"[COPY] Price:     {price:.4f}")
+            if timestamp:
+                print(f"[COPY] Time:      {timestamp}")
+            print(f"[COPY] ----------------------------------")
+
+            success = self.place_bet(market_id, outcome, size, price)
+
             if success:
                 self.copied_bets += 1
                 self.last_activity = f"Copied {outcome}"
-                print(f"[SUCCESS] Bet copied! Total copied: {self.copied_bets}")
+                print(f"[SUCCESS] Trade copied! Total: {self.copied_bets}")
             else:
                 print(f"[FAILED] Could not copy trade")
-        
+
         except Exception as e:
-            print(f"Error copying trade: {e}")
+            print(f"[ERROR] copying trade: {e}")
             import traceback
             traceback.print_exc()
-    
-    def place_bet(self, market_id, direction, amount):
-        """Размещаем ставку на рынке"""
+
+    def place_bet(self, market_id, direction, amount, price=0):
+        """Place a bet on a market (demo or live)"""
         try:
-            print(f"[BET] Placing {amount} USDC on {direction} for market {market_id}")
-            
-            # TODO: Реальное размещение ставки через API
-            # Здесь нужно:
-            # 1. Получить данные рынка
-            # 2. Создать ордер
-            # 3. Подписать транзакцию приватным ключом
-            # 4. Отправить на CLOB
-            
-            # На данный момент просто возвращаем True для демонстрации
-            print(f"[BET] Bet placed successfully (demo mode)")
-            return True
-        
-        except Exception as e:
-            print(f"Error placing bet: {e}")
+            print(f"[BET] Placing {amount:.2f} USDC on '{direction}' for market {market_id}")
+
+            if self.demo_mode:
+                print(f"[BET] DEMO MODE - Trade detected and logged, no real order placed")
+                return True
+
+            # Real order placement requires PRIVATE_KEY and WALLET_ADDRESS
+            print(f"[BET] LIVE MODE - Real order placement via CLOB API")
+            # Real order placement is a future extension; for now log and return False
+            print(f"[BET] Real order placement not yet implemented")
             return False
-    
+
+        except Exception as e:
+            print(f"[ERROR] placing bet: {e}")
+            return False
+
     def get_market_info(self, market_id):
-        """Получить информацию о рынке"""
+        """Get market information from Gamma API"""
         try:
-            url = f'{self.api_host}/markets/{market_id}'
+            url = f'{self.gamma_api}/markets/{market_id}'
             print(f"[API] Fetching market: {url}")
             response = requests.get(url, timeout=10)
-            
+
             if response.status_code == 200:
                 print(f"[API] Got market info")
                 return response.json()
-            
+
             print(f"[API] Market error: {response.status_code}")
             return None
         except Exception as e:
-            print(f"Error fetching market: {e}")
+            print(f"[ERROR] fetching market: {e}")
             return None
