@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Copy Trading Bot Interface</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <header>
+        <h1>Copy Trading Bot Interface</h1>
+    </header>
+    <main>
+        <section class="trading-info">
+            <h2>Current Trades</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Trader</th>
+                        <th>Asset</th>
+                        <th>Action</th>
+                        <th>Amount</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <!-- Trade rows will be dynamically generated here -->
+                </tbody>
+            </table>
+        </section>
+        <section class="trade-options">
+            <h2>Trade Options</h2>
+            <form id="trade-form">
+                <label for="asset">Select Asset:</label>
+                <select id="asset" name="asset">
+                    <option value="asset1">Asset 1</option>
+                    <option value="asset2">Asset 2</option>
+                    <option value="asset3">Asset 3</option>
+                </select>
+                <label for="action">Action:</label>
+                <select id="action" name="action">
+                    <option value="buy">Buy</option>
+                    <option value="sell">Sell</option>
+                </select>
+                <label for="amount">Amount:</label>
+                <input type="number" id="amount" name="amount" min="0" required>
+                <button type="submit">Execute Trade</button>
+            </form>
+        </section>
+    </main>
+    <footer>
+        <p>&copy; 2026 Copy Trading Bot. All rights reserved.</p>
+    </footer>
+    <script src="script.js"></script>
+</body>
+</html>
